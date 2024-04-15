@@ -1,5 +1,5 @@
 ##
-# Copyright 2015-2023 Ghent University
+# Copyright 2015-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -30,6 +30,7 @@ EasyBuild support for Molpro, implemented as an easyblock
 import os
 import shutil
 import re
+import stat
 from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.binary import Binary
@@ -38,7 +39,7 @@ from easybuild.framework.easyblock import EasyBlock
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.config import build_option
-from easybuild.tools.filetools import apply_regex_substitutions, mkdir, read_file, symlink
+from easybuild.tools.filetools import apply_regex_substitutions, mkdir, read_file, symlink, adjust_permissions
 from easybuild.tools.run import run_cmd, run_cmd_qa
 
 
@@ -54,6 +55,7 @@ class EB_Molpro(ConfigureMake, Binary):
         extra_vars = ConfigureMake.extra_options(extra_vars)
         extra_vars.update({
             'precompiled_binaries': [False, "Are we installing precompiled binaries?", CUSTOM],
+            'license_token': [os.path.join(os.path.expanduser('~'), '.molpro', 'token'), "Path to Molpro license token", CUSTOM],
         })
         return EasyBlock.extra_options(extra_vars)
 
@@ -65,7 +67,7 @@ class EB_Molpro(ConfigureMake, Binary):
         self.orig_launcher = None
 
         self.cleanup_token_symlink = False
-        self.license_token = os.path.join(os.path.expanduser('~'), '.molpro', 'token')
+        # self.cfg['license_token'] = os.path.join(os.path.expanduser('~'), '.molpro', 'token')
 
     def extract_step(self):
         """Extract Molpro source files, or just copy in case of binary install."""
@@ -77,17 +79,17 @@ class EB_Molpro(ConfigureMake, Binary):
     def configure_step(self):
         """Custom configuration procedure for Molpro: use 'configure -batch'."""
 
-        if not os.path.isfile(self.license_token):
+        if not os.path.isfile(self.cfg['license_token']):
             if self.cfg['license_file'] is not None and os.path.isfile(self.cfg['license_file']):
                 # put symlink in place to specified license file in $HOME/.molpro/token
                 # other approaches (like defining $MOLPRO_KEY) don't seem to work
                 self.cleanup_token_symlink = True
-                mkdir(os.path.dirname(self.license_token))
-                symlink(self.cfg['license_file'], self.license_token)
-                self.log.debug("Symlinked %s to %s", self.cfg['license_file'], self.license_token)
+                mkdir(os.path.dirname(self.cfg['license_token']))
+                symlink(self.cfg['license_file'], self.cfg['license_token'])
+                self.log.debug("Symlinked %s to %s", self.cfg['license_file'], self.cfg['license_token'])
             else:
                 self.log.warning("No licence token found at either %s or via 'license_file'",
-                                 self.license_token)
+                                 self.cfg['license_token'])
 
         # Only do the rest of the configuration if we're building from source
         if not self.cfg['precompiled_binaries']:
@@ -170,7 +172,7 @@ class EB_Molpro(ConfigureMake, Binary):
         """
 
         # Only bother to check if the licence token is available
-        if os.path.isfile(self.license_token) and not self.cfg['precompiled_binaries']:
+        if os.path.isfile(self.cfg['license_token']) and not self.cfg['precompiled_binaries']:
 
             # check 'main routes' only
             run_cmd("make quicktest")
@@ -219,8 +221,19 @@ class EB_Molpro(ConfigureMake, Binary):
                     r"directory .* does not exist, try to create [Y]/n\n": '',
                 }
                 run_cmd_qa(cmd, qa=qa, std_qa=stdqa, log_all=True, simple=True)
+
+            # Install license
+            if os.path.isfile(self.cfg['license_token']):
+                token_path = os.path.join(self.installdir, "lib", ".token")
+                try:
+                    shutil.copy(self.cfg['license_token'], token_path)
+                    self.log.debug("Copied %s to %s", self.cfg['license_token'], token_path)
+                    adjust_permissions(token_path, 0o640, relative=False)
+                except OSError as err:
+                    raise EasyBuildError("Failed to install license token %s to %s: %s",
+                            self.cfg['license_token'], token_path, err)
         else:
-            if os.path.isfile(self.license_token):
+            if os.path.isfile(self.cfg['license_token']):
                 run_cmd("make tuning")
 
             super(EB_Molpro, self).install_step()
@@ -232,10 +245,10 @@ class EB_Molpro(ConfigureMake, Binary):
 
         if self.cleanup_token_symlink:
             try:
-                os.remove(self.license_token)
-                self.log.debug("Symlink to license token %s removed", self.license_token)
+                os.remove(self.cfg['license_token'])
+                self.log.debug("Symlink to license token %s removed", self.cfg['license_token'])
             except OSError as err:
-                raise EasyBuildError("Failed to remove %s: %s", self.license_token, err)
+                raise EasyBuildError("Failed to remove %s: %s", self.cfg['license_token'], err)
 
     def make_module_req_guess(self):
         """Customize $PATH guesses for Molpro module."""
