@@ -1,5 +1,5 @@
 ##
-# Copyright 2012-2023 Ghent University
+# Copyright 2012-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -39,7 +39,7 @@ from easybuild.tools.modules import get_software_root
 from easybuild.tools.systemtools import get_shared_lib_ext
 
 
-EXTS_FILTER_R_PACKAGES = ("R -q --no-save", "library(%(ext_name)s)")
+EXTS_FILTER_R_PACKAGES = ("R_LIBS_USER=/dev/null R -q --no-save", "library(%(ext_name)s)")
 
 
 class EB_R(ConfigureMake):
