@@ -1,5 +1,5 @@
 ##
-# Copyright 2013-2023 Ghent University
+# Copyright 2013-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -33,8 +33,8 @@ import os
 from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.tarball import Tarball
-from easybuild.framework.easyconfig import MANDATORY
-from easybuild.tools.filetools import write_file
+from easybuild.framework.easyconfig import CUSTOM
+from easybuild.tools.filetools import write_file, symlink
 
 
 class EB_FreeSurfer(Tarball):
@@ -43,14 +43,20 @@ class EB_FreeSurfer(Tarball):
     @staticmethod
     def extra_options():
         extra_vars = {
-            'license_text': ['', "Text for required license file.", MANDATORY],
+            'license_text': ['', "Text for required license file.", CUSTOM],
+            'license_file': ['', "Path to license file.", CUSTOM],
         }
         return Tarball.extra_options(extra_vars)
 
     def install_step(self):
         """Custom installation procedure for FreeSurfer, which includes installed the license file '.license'."""
         super(EB_FreeSurfer, self).install_step()
-        write_file(os.path.join(self.installdir, '.license'), self.cfg['license_text'])
+        license_location = os.path.join(self.installdir, '.license')
+        if self.cfg['license_file']:
+            symlink(self.cfg['license_file'], license_location)
+        else:
+            write_file(license_location, self.cfg['license_text'])
+
 
     def make_module_req_guess(self):
         """Include correct subdirectories to $PATH for FreeSurfer."""
