@@ -1,6 +1,6 @@
 ##
-# Copyright 2015-2023 Bart Oldeman
-# Copyright 2016-2023 Forschungszentrum Juelich
+# Copyright 2015-2024 Bart Oldeman
+# Copyright 2016-2024 Forschungszentrum Juelich
 #
 # This file is triple-licensed under GPLv2 (see below), MIT, and
 # BSD three-clause licenses.
@@ -38,6 +38,7 @@ import fileinput
 import re
 import stat
 import sys
+import tempfile
 import platform
 
 from easybuild.tools import LooseVersion
@@ -53,9 +54,6 @@ from easybuild.tools.build_log import EasyBuildError, print_warning
 # contents for siterc file to make PGI/NVHPC pick up $LIBRARY_PATH
 # cfr. https://www.pgroup.com/support/link.htm#lib_path_ldflags
 SITERC_LIBRARY_PATH = """
-# get the value of the environment variable LIBRARY_PATH
-variable LIBRARY_PATH is environment(LIBRARY_PATH);
-
 # split this value at colons, separate by -L, prepend 1st one by -L
 variable library_path is
 default($if($LIBRARY_PATH,-L$replace($LIBRARY_PATH,":", -L)));
@@ -66,6 +64,14 @@ append LDLIBARGS=$library_path;
 # also include the location where libm & co live on Debian-based systems
 # cfr. https://github.com/easybuilders/easybuild-easyblocks/pull/919
 append LDLIBARGS=-L/usr/lib/x86_64-linux-gnu;
+"""
+
+# contents for minimal example compiled in sanity check, used to catch issue
+# seen in: https://github.com/easybuilders/easybuild-easyblocks/pull/3240
+NVHPC_MINIMAL_EXAMPLE = """
+#include <ranges>
+
+int main(){ return 0; }
 """
 
 
@@ -165,7 +171,8 @@ class EB_NVHPC(PackedBinary):
             sys.stdout.write(line)
 
         if LooseVersion(self.version) >= LooseVersion('22.9'):
-            cmd = "%s -x %s" % (makelocalrc_filename, compilers_subdir)
+            bin_subdir = os.path.join(compilers_subdir, "bin")
+            cmd = "%s -x %s" % (makelocalrc_filename, bin_subdir)
         else:
             cmd = "%s -x %s -g77 /" % (makelocalrc_filename, compilers_subdir)
         run_cmd(cmd, log_all=True, simple=True)
@@ -178,12 +185,11 @@ class EB_NVHPC(PackedBinary):
                 if os.path.islink(path):
                     os.remove(path)
 
-        if LooseVersion(self.version) < LooseVersion('21.3'):
-            # install (or update) siterc file to make NVHPC consider $LIBRARY_PATH
-            siterc_path = os.path.join(compilers_subdir, 'bin', 'siterc')
-            write_file(siterc_path, SITERC_LIBRARY_PATH, append=True)
-            self.log.info("Appended instructions to pick up $LIBRARY_PATH to siterc file at %s: %s",
-                          siterc_path, SITERC_LIBRARY_PATH)
+        # install (or update) siterc file to make NVHPC consider $LIBRARY_PATH
+        siterc_path = os.path.join(compilers_subdir, 'bin', 'siterc')
+        write_file(siterc_path, SITERC_LIBRARY_PATH, append=True)
+        self.log.info("Appended instructions to pick up $LIBRARY_PATH to siterc file at %s: %s",
+                      siterc_path, SITERC_LIBRARY_PATH)
 
         # The cuda nvvp tar file has broken permissions
         adjust_permissions(self.installdir, stat.S_IWUSR, add=True, onlydirs=True)
@@ -202,7 +208,18 @@ class EB_NVHPC(PackedBinary):
             'dirs': [os.path.join(prefix, 'compilers', 'bin'), os.path.join(prefix, 'compilers', 'lib'),
                      os.path.join(prefix, 'compilers', 'include'), os.path.join(prefix, 'compilers', 'man')]
         }
+
         custom_commands = ["%s -v" % compiler for compiler in compiler_names]
+
+        if LooseVersion(self.version) >= LooseVersion('21'):
+            # compile minimal example using -std=c++20 to catch issue where it picks up the wrong GCC
+            # (as long as system gcc is < 9.0)
+            # see: https://github.com/easybuilders/easybuild-easyblocks/pull/3240
+            tmpdir = tempfile.mkdtemp()
+            write_file(os.path.join(tmpdir, 'minimal.cpp'), NVHPC_MINIMAL_EXAMPLE)
+            minimal_compiler_cmd = "cd %s && nvc++ -std=c++20 minimal.cpp -o minimal" % tmpdir
+            custom_commands.append(minimal_compiler_cmd)
+
         super(EB_NVHPC, self).sanity_check_step(custom_paths=custom_paths, custom_commands=custom_commands)
 
     def _nvhpc_extended_components(self, dirs, basepath, env_vars_dirs):
