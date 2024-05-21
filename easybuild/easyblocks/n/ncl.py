@@ -217,19 +217,41 @@ class EB_NCL(EasyBlock):
         cmd = "./config/ymkmf"
         run_cmd(cmd, log_all=True, simple=True)
 
-        # Super hacky substitution to fix Makefile being generate with
+        # Super hacky substitution to fix Makefile being generated with
         # 1 instead of x86_64 in installpath
         cmd = "sed -i 's/\/1\//\/x86_64\//g' Makefile"
         run_cmd(cmd, log_all=True, simple=True)
 
+        # cmd = "sed -i '/\t@$(MAKE) $(MFLAGS) me/d' Makefile"
+        # run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "make me"
+        run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "make Makefiles"
+        run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "grep -R '/1/generic' | cut -f1 -d: | sort | uniq | xargs sed -i 's/\/1\/generic/\/x86_64\/generic/g'"
+        run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "make clean"
+        run_cmd(cmd, log_all=True, simple=True)
+
     def build_step(self):
         """Building is done in install_step."""
-        pass
+        cmd = "%s make -j %s includes %s" % (self.cfg['prebuildopts'], self.cfg['parallel'], self.cfg['buildopts'])
+        run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "%s make -j %s depend %s" % (self.cfg['prebuildopts'], self.cfg['parallel'], self.cfg['buildopts'])
+        run_cmd(cmd, log_all=True, simple=True)
+
+        cmd = "%s make -j %s all %s" % (self.cfg['prebuildopts'], self.cfg['parallel'], self.cfg['buildopts'])
+        run_cmd(cmd, log_all=True, simple=True)
 
     def install_step(self):
         """Build in install dir using build_step."""
 
-        cmd = "%s make Everything %s" % (self.cfg['preinstallopts'], self.cfg['installopts'])
+        cmd = "%s make install %s" % (self.cfg['preinstallopts'], self.cfg['installopts'])
         run_cmd(cmd, log_all=True, simple=True)
 
     def sanity_check_step(self):
