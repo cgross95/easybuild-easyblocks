@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2023 Ghent University
+# Copyright 2009-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -215,6 +215,11 @@ class EB_NCL(EasyBlock):
 
         # generate Makefile
         cmd = "./config/ymkmf"
+        run_cmd(cmd, log_all=True, simple=True)
+
+        # Super hacky substitution to fix Makefile being generate with
+        # 1 instead of x86_64 in installpath
+        cmd = "sed -i 's/\/1\//\/x86_64\//g' Makefile"
         run_cmd(cmd, log_all=True, simple=True)
 
     def build_step(self):
