@@ -231,7 +231,18 @@ class EB_NCL(EasyBlock):
         cmd = "make Makefiles"
         run_cmd(cmd, log_all=True, simple=True)
 
-        cmd = "grep -R '/1/generic' | cut -f1 -d: | sort | uniq | xargs sed -i 's/\/1\/generic/\/x86_64\/generic/g'"
+        install_list = self.installdir.split('/')
+        arch_loc = install_list.index('x86_64')
+
+        context = install_list[arch_loc - 1:arch_loc+2]
+        context_search = context.copy()
+        context_search[1] = '1'
+
+        cmd = "grep -R '%(grep_search)s' | cut -f1 -d: | sort | uniq | xargs sed -i 's/%(sed_search)s/%(sed_replacement)s/g'" % {
+                'grep_search': '/'.join(context_search),
+                'sed_search': '\/'.join(context_search),
+                'sed_replacement': '\/'.join(context),
+                }
         run_cmd(cmd, log_all=True, simple=True)
 
         cmd = "make clean"
