@@ -231,7 +231,7 @@ class EB_NCL(EasyBlock):
         cmd = "make Makefiles"
         run_cmd(cmd, log_all=True, simple=True)
 
-        cmd = "grep -R '/1/' | cut -f1 -d: | sort | uniq | xargs sed -i 's/\/1\//\/x86_64\//g'"
+        cmd = "grep -R '/1/generic' | cut -f1 -d: | sort | uniq | xargs sed -i 's/\/1\/generic/\/x86_64\/generic/g'"
         run_cmd(cmd, log_all=True, simple=True)
 
         cmd = "make clean"
