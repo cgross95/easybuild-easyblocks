@@ -1,5 +1,5 @@
 ##
-# Copyright 2017-2023 Ghent University
+# Copyright 2017-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -97,9 +97,9 @@ class EB_TensorRT(PythonPackage, Binary):
 
         pyver = ''.join(get_software_version('Python').split('.')[:2])
         whls = [
-            os.path.join('graphsurgeon', 'graphsurgeon-*-py2.py3-none-any.whl'),
-            os.path.join('uff', 'uff-*-py2.py3-none-any.whl'),
             os.path.join('python', 'tensorrt-%s-cp%s-*-linux_x86_64.whl' % (self.version, pyver)),
+            os.path.join('python', 'tensorrt_lean-%s-cp%s-*-linux_x86_64.whl' % (self.version, pyver)),
+            os.path.join('python', 'tensorrt_dispatch-%s-cp%s-*-linux_x86_64.whl' % (self.version, pyver)),
         ]
         for whl in whls:
             whl_paths = glob.glob(os.path.join(self.installdir, whl))
