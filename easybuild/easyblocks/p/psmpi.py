@@ -1,5 +1,5 @@
 ##
-# Copyright 2016-2024 Ghent University, Forschungszentrum Juelich
+# Copyright 2016-2025 Ghent University, Forschungszentrum Juelich
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -92,7 +92,10 @@ class EB_psmpi(EB_MPICH):
 
         if self.cfg['msa']:
             self.log.info("Enabling MSA-Awareness...")
-            self.cfg.update('configopts', ' --with-msa-awareness')
+            if LooseVersion(self.version) >= LooseVersion('5.10.0-1'):
+                self.cfg.update('configopts', ' --enable-msa-awareness')
+            else:
+                self.cfg.update('configopts', ' --with-msa-awareness')
 
         # Set confset
         comp_fam = self.toolchain.comp_family()
@@ -104,7 +107,10 @@ class EB_psmpi(EB_MPICH):
 
         # Enable threading, if necessary
         if self.cfg['threaded']:
-            self.cfg.update('configopts', ' --with-threading')
+            if LooseVersion(self.version) >= LooseVersion('5.10.0-1'):
+                self.cfg.update('configopts', ' --enable-threading')
+            else:
+                self.cfg.update('configopts', ' --with-threading')
 
         # Add extra mpich options, if any
         if self.cfg['mpich_opts'] is not None:
@@ -133,7 +139,7 @@ class EB_psmpi(EB_MPICH):
         pscom_flags += ' export PSCOM_CPPFLAGS="-I{0}/include $PSCOM_CPPFLAGS" &&'.format(pscom_path)
         self.cfg.update('preconfigopts', pscom_flags)
 
-        super(EB_psmpi, self).configure_step(add_mpich_configopts=False)
+        super().configure_step(add_mpich_configopts=False)
 
     # make and make install are default
 
@@ -148,6 +154,6 @@ class EB_psmpi(EB_MPICH):
         # ParaStationMPI < 5.1.1-1 is based on MPICH < 3.1.1.
         use_new_libnames = LooseVersion(self.version) >= LooseVersion('5.1.1-1')
 
-        super(EB_psmpi, self).sanity_check_step(use_new_libnames=use_new_libnames,
-                                                check_launchers=False,
-                                                check_static_libs=False)
+        super().sanity_check_step(use_new_libnames=use_new_libnames,
+                                  check_launchers=False,
+                                  check_static_libs=False)

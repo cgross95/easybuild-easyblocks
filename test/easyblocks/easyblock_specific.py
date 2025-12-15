@@ -1,5 +1,5 @@
 ##
-# Copyright 2019-2024 Ghent University
+# Copyright 2019-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -29,15 +29,22 @@ Unit tests for specific easyblocks.
 """
 import copy
 import os
+import re
 import stat
 import sys
 import tempfile
 import textwrap
+from io import StringIO
 from unittest import TestLoader, TextTestRunner
+from pathlib import Path
 from test.easyblocks.module import cleanup
 
 import easybuild.tools.options as eboptions
+import easybuild.tools.tomllib as tomllib
 import easybuild.easyblocks.generic.pythonpackage as pythonpackage
+import easybuild.easyblocks.generic.cargo as cargo
+import easybuild.easyblocks.l.lammps as lammps
+import easybuild.easyblocks.p.python as python
 from easybuild.base.testing import TestCase
 from easybuild.easyblocks.generic.cmakemake import det_cmake_version
 from easybuild.easyblocks.generic.toolchain import Toolchain
@@ -50,14 +57,14 @@ from easybuild.tools.environment import modify_env
 from easybuild.tools.filetools import adjust_permissions, mkdir, move_file, remove_dir, symlink, write_file
 from easybuild.tools.modules import modules_tool
 from easybuild.tools.options import set_tmpdir
-from easybuild.tools.py2vs3 import StringIO
+from easybuild.tools.run import RunShellCmdResult
 
 
 class EasyBlockSpecificTest(TestCase):
     """ Baseclass for easyblock testcases """
 
     # initialize configuration (required for e.g. default modules_tool setting)
-    eb_go = eboptions.parse_options()
+    eb_go = eboptions.parse_options(args=[])
     config.init(eb_go.options, eb_go.get_options_by_section('config'))
     build_options = {
         'suffix_modules_path': GENERAL_CLASS,
@@ -70,12 +77,13 @@ class EasyBlockSpecificTest(TestCase):
 
     def setUp(self):
         """Test setup."""
-        super(EasyBlockSpecificTest, self).setUp()
+        super().setUp()
         self.tmpdir = tempfile.mkdtemp()
 
         self.orig_sys_stdout = sys.stdout
         self.orig_sys_stderr = sys.stderr
         self.orig_environ = copy.deepcopy(os.environ)
+        self.orig_pythonpackage_run_shell_cmd = pythonpackage.run_shell_cmd
 
     def tearDown(self):
         """Test cleanup."""
@@ -83,11 +91,12 @@ class EasyBlockSpecificTest(TestCase):
 
         sys.stdout = self.orig_sys_stdout
         sys.stderr = self.orig_sys_stderr
+        pythonpackage.run_shell_cmd = self.orig_pythonpackage_run_shell_cmd
 
         # restore original environment
         modify_env(os.environ, self.orig_environ, verbose=False)
 
-        super(EasyBlockSpecificTest, self).tearDown()
+        super().tearDown()
 
     def mock_stdout(self, enable):
         """Enable/disable mocking stdout."""
@@ -266,6 +275,44 @@ class EasyBlockSpecificTest(TestCase):
         """))
         self.assertEqual(det_cmake_version(), '1.2.3-rc4')
 
+    def test_det_installed_python_packages(self):
+        """
+        Test det_installed_python_packages function providyed by PythonPackage easyblock
+        """
+        pkg1 = None
+        res = python.det_installed_python_packages(python_cmd=sys.executable)
+        # we can't make too much assumptions on which installed Python packages are found
+        self.assertTrue(isinstance(res, list))
+        if res:
+            pkg1_name = res[0]
+            self.assertTrue(isinstance(pkg1_name, str))
+
+        res_detailed = python.det_installed_python_packages(python_cmd=sys.executable, names_only=False)
+        self.assertTrue(isinstance(res_detailed, list))
+        if res_detailed:
+            pkg1 = res_detailed[0]
+            self.assertTrue(isinstance(pkg1, dict))
+            self.assertTrue(sorted(pkg1.keys()), ['name', 'version'])
+            self.assertEqual(pkg1['name'], pkg1_name)
+            regex = re.compile('^[0-9].*')
+            ver = pkg1['version']
+            self.assertTrue(regex.match(ver), f"Pattern {regex.pattern} matches for pkg version: {ver}")
+
+        def mocked_run_shell_cmd_pip(cmd, **kwargs):
+            stderr = None
+            if "pip list" in cmd:
+                output = '[{"name": "example", "version": "1.2.3"}]'
+                stderr = "DEPRECATION: Python 2.7 reached the end of its life on January 1st, 2020"
+            else:
+                # unexpected command
+                return None
+
+            return RunShellCmdResult(cmd=cmd, exit_code=0, output=output, stderr=stderr, work_dir=None,
+                                     out_file=None, err_file=None, cmd_sh=None, thread_id=None, task_id=None)
+        python.run_shell_cmd = mocked_run_shell_cmd_pip
+        res = python.det_installed_python_packages(python_cmd=sys.executable)
+        self.assertEqual(res, ['example'])
+
     def test_det_py_install_scheme(self):
         """Test det_py_install_scheme function provided by PythonPackage easyblock."""
         res = pythonpackage.det_py_install_scheme(sys.executable)
@@ -278,6 +325,139 @@ class EasyBlockSpecificTest(TestCase):
 
         res = pythonpackage.det_py_install_scheme()
         self.assertTrue(isinstance(res, str))
+
+    def test_cargo_get_workspace_members(self):
+        """Test get_workspace_members in the Cargo easyblock"""
+        # Simple crate
+        toml_text = textwrap.dedent("""
+            [package]
+            name = 'my_crate'
+            version = "0.1.0"
+            edition = "2021"
+            description = 'desc'
+            documentation = "url"
+            license = "MIT"
+        """)
+        members = cargo._get_workspace_members(tomllib.loads(toml_text))
+        self.assertIsNone(members)
+
+        # Virtual manifest
+        toml_text = textwrap.dedent("""
+            [workspace]
+            members = [
+                "reqwest-middleware",
+                "reqwest-tracing",
+                "reqwest-retry",
+            ]
+        """)
+        members = cargo._get_workspace_members(tomllib.loads(toml_text))
+        self.assertEqual(members, ["reqwest-middleware", "reqwest-tracing", "reqwest-retry"])
+
+        # Workspace (root is a package too)
+        toml_text = textwrap.dedent("""
+            [package]
+            name = "nothing-linux-ui"
+            version = "0.0.2"
+            edition = "2021"
+            authors = ["sn99"]
+
+            [workspace]
+            members = ["nothing", "src-tauri"]
+
+            [dependencies]
+            leptos = { version = "0.6", features = ["csr"] }
+        """)
+        members = cargo._get_workspace_members(tomllib.loads(toml_text))
+        self.assertEqual(members, ["nothing", "src-tauri"])
+
+    def test_cargo_merge_sub_crate(self):
+        """Test merge_sub_crate in the Cargo easyblock"""
+        crate_dir = Path(tempfile.mkdtemp())
+        cargo_toml = crate_dir / 'Cargo.toml'
+        ws_parsed = tomllib.loads("""
+            [workspace]
+            members = ["bar"]
+
+            [workspace.package]
+            version = "1.2.3"
+            authors = ["Nice Folks"]
+            description = "A short description of my package"
+            documentation = "https://example.com/bar"
+
+            [workspace.dependencies]
+            regex = { version = "1.6.0", default-features = false, features = ["std"] }
+            cc = "1.0.73"
+            rand = "0.8.5"
+
+            [workspace.lints.rust]
+            unsafe_code = "forbid"
+        """)
+        cargo_toml.write_text("""
+            [package]
+            name = "bar"
+            version.workspace = true
+            authors.workspace = true
+            description.workspace = true
+            documentation.workspace = true
+
+            # Unrelated line that looks like a workspace key
+            dummy = "Uses regex=123 and regex = 456 and not foo.workspace = true"
+
+            [dependencies]
+            foo = { version = "42" }
+            # Overwrite 'features' value
+            regex = { workspace = true, features = ["unicode"] }
+
+            [build-dependencies]
+            cc.workspace = true
+
+            [dev-dependencies]
+            rand = { workspace = true }
+
+            [lints]
+            workspace = true
+        """)
+        cargo._merge_sub_crate(cargo_toml, ws_parsed)
+        self.assertEqual(tomllib.loads(cargo_toml.read_text()), tomllib.loads("""
+            [package]
+            name = "bar"
+            version = "1.2.3"
+            authors = ["Nice Folks"]
+            description = "A short description of my package"
+            documentation = "https://example.com/bar"
+
+            dummy = "Uses regex=123 and regex = 456 and not foo.workspace = true"
+
+            [dependencies]
+            foo = { version = "42" }
+            regex = { version = "1.6.0", default-features = false, features = ["unicode"] }
+
+            [build-dependencies]
+            cc = "1.0.73"
+
+            [dev-dependencies]
+            rand = "0.8.5"
+
+            [lints.rust]
+            unsafe_code = "forbid"
+        """))
+
+        # Only dict-style workspace dependency
+        cargo_toml.write_text("""
+            [package]
+            name = "bar"
+
+            [dependencies]
+            regex = { workspace = true }
+        """)
+        cargo._merge_sub_crate(cargo_toml, ws_parsed)
+        self.assertEqual(tomllib.loads(cargo_toml.read_text()), tomllib.loads("""
+            [package]
+            name = "bar"
+
+            [dependencies]
+            regex = { version = "1.6.0", default-features = false, features = ["std"] }
+        """))
 
     def test_handle_local_py_install_scheme(self):
         """Test handle_local_py_install_scheme function provided by PythonPackage easyblock."""
@@ -313,6 +493,89 @@ class EasyBlockSpecificTest(TestCase):
         self.assertTrue(os.path.exists(os.path.join(bindir, 'test')))
         local_test_py = os.path.join(libdir, 'python' + pyshortver, 'site-packages', 'test.py')
         self.assertTrue(os.path.exists(local_test_py))
+
+    def test_run_pip_check(self):
+        """Test run_pip_check function provided by PythonPackage easyblock."""
+
+        def mocked_run_shell_cmd_pip(cmd, **kwargs):
+            if "pip check" in cmd:
+                output = "No broken requirements found."
+            elif "pip list" in cmd:
+                output = '[{"name": "example", "version": "1.2.3"}]'
+            elif "pip --version" in cmd:
+                output = "pip 20.0"
+            else:
+                # unexpected command
+                return None
+
+            return RunShellCmdResult(cmd=cmd, exit_code=0, output=output, stderr=None, work_dir=None,
+                                     out_file=None, err_file=None, cmd_sh=None, thread_id=None, task_id=None)
+
+        python.run_shell_cmd = mocked_run_shell_cmd_pip
+        with self.mocked_stdout_stderr():
+            python.run_pip_check(python_cmd=sys.executable)
+
+        # test ignored of unversioned Python packages
+        def mocked_run_shell_cmd_pip(cmd, **kwargs):
+            if "pip check" in cmd:
+                output = "No broken requirements found."
+            elif "pip list" in cmd:
+                output = '[{"name": "zero", "version": "0.0.0"}]'
+            elif "pip --version" in cmd:
+                output = "pip 20.0"
+            else:
+                # unexpected command
+                return None
+
+            return RunShellCmdResult(cmd=cmd, exit_code=0, output=output, stderr=None, work_dir=None,
+                                     out_file=None, err_file=None, cmd_sh=None, thread_id=None, task_id=None)
+
+        python.run_shell_cmd = mocked_run_shell_cmd_pip
+        with self.mocked_stdout_stderr():
+            python.run_pip_check(python_cmd=sys.executable, unversioned_packages=('zero', ))
+
+        with self.mocked_stdout_stderr():
+            python.run_pip_check(python_cmd=sys.executable, unversioned_packages=set(['zero']))
+
+        # inject all possible errors
+        def mocked_run_shell_cmd_pip(cmd, **kwargs):
+            if "pip check" in cmd:
+                output = "foo-1.2.3 requires bar-4.5.6, which is not installed."
+                exit_code = 1
+            elif "pip list" in cmd:
+                output = '[{"name": "example", "version": "1.2.3"}, {"name": "wrong", "version": "0.0.0"}]'
+                exit_code = 0
+            elif "pip --version" in cmd:
+                output = "pip 20.0"
+                exit_code = 0
+            else:
+                # unexpected command
+                return None
+
+            return RunShellCmdResult(cmd=cmd, exit_code=exit_code, output=output, stderr=None, work_dir=None,
+                                     out_file=None, err_file=None, cmd_sh=None, thread_id=None, task_id=None)
+
+        python.run_shell_cmd = mocked_run_shell_cmd_pip
+        error_pattern = '\n'.join([
+            "pip check.*failed.*",
+            "foo.*requires.*bar.*not installed.*",
+            r"Package 'example'.*version of 1\.2\.3 which is valid.*",
+            "Package 'nosuchpkg' in unversioned_packages was not found in the installed packages.*",
+            r".*not installed correctly.*version of '0\.0\.0':",
+            "wrong",
+        ])
+        with self.mocked_stdout_stderr():
+            self.assertErrorRegex(EasyBuildError, error_pattern, python.run_pip_check,
+                                  python_cmd=sys.executable, unversioned_packages=['example', 'nosuchpkg'])
+
+        # invalid pip version
+        def mocked_run_shell_cmd_pip(cmd, **kwargs):
+            return RunShellCmdResult(cmd=cmd, exit_code=0, output="1.2.3", stderr=None, work_dir=None,
+                                     out_file=None, err_file=None, cmd_sh=None, thread_id=None, task_id=None)
+
+        python.run_shell_cmd = mocked_run_shell_cmd_pip
+        error_pattern = "Failed to determine pip version!"
+        self.assertErrorRegex(EasyBuildError, error_pattern, python.run_pip_check, python_cmd=sys.executable)
 
     def test_symlink_dist_site_packages(self):
         """Test symlink_dist_site_packages provided by PythonPackage easyblock."""
@@ -359,12 +622,43 @@ class EasyBlockSpecificTest(TestCase):
         self.assertTrue(os.path.isdir(lib64_site_path))
         self.assertFalse(os.path.islink(lib64_site_path))
 
+    def test_translate_lammps_version(self):
+        """Test translate_lammps_version function from LAMMPS easyblock"""
+        lammps_versions = {
+            '23Jun2022': '2022.06.23',
+            '2Aug2023_update2': '2023.08.02.2',
+            '29Aug2024': '2024.08.29',
+            '29Aug2024_update2': '2024.08.29.2',
+            '28Oct2024': '2024.10.28',
+        }
+        for key in lammps_versions:
+            self.assertEqual(lammps.translate_lammps_version(key), lammps_versions[key])
 
-def suite():
+        version_file = os.path.join(self.tmpdir, 'src', 'version.h')
+        version_txt = '\n'.join([
+            '#define LAMMPS_VERSION "2 Apr 2025"',
+            '#define LAMMPS_UPDATE "Development"',
+        ])
+        write_file(version_file, version_txt)
+
+        self.assertEqual(lammps.translate_lammps_version('d3adb33f', path=self.tmpdir), '2025.04.02')
+        self.assertEqual(lammps.translate_lammps_version('devel', path=self.tmpdir), '2025.04.02')
+
+        version_file = os.path.join(self.tmpdir, 'src', 'version.h')
+        version_txt = '\n'.join([
+            '#define LAMMPS_VERSION "2 Apr 2025"',
+            '#define LAMMPS_UPDATE "Update 3"',
+        ])
+        write_file(version_file, version_txt)
+
+        self.assertEqual(lammps.translate_lammps_version('d3adb33f', path=self.tmpdir), '2025.04.02.3')
+
+
+def suite(loader):
     """Return all easyblock-specific tests."""
-    return TestLoader().loadTestsFromTestCase(EasyBlockSpecificTest)
+    return loader.loadTestsFromTestCase(EasyBlockSpecificTest)
 
 
 if __name__ == '__main__':
-    res = TextTestRunner(verbosity=1).run(suite())
+    res = TextTestRunner(verbosity=1).run(suite(TestLoader()))
     sys.exit(len(res.failures))
